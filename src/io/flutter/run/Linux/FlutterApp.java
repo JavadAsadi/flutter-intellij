@@ -3,7 +3,7 @@
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
-package io.flutter.run.daemon;
+package io.flutter.run.linux;
 
 import com.google.common.base.Stopwatch;
 import com.google.gson.JsonObject;
@@ -28,11 +28,11 @@ import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.util.EventDispatcher;
 import com.intellij.util.concurrency.AppExecutorUtil;
 import com.jetbrains.lang.dart.ide.toolingDaemon.DartToolingDaemonService;
+import io.flutter.FlutterProjectDisposable;
 import io.flutter.FlutterUtils;
 import io.flutter.ObservatoryConnector;
 import io.flutter.dart.DtdRequest;
 import io.flutter.dart.DtdUtils;
-import io.flutter.dart.FlutterDartAnalysisServer;
 import io.flutter.logging.FlutterConsoleLogManager;
 import io.flutter.logging.PluginLogger;
 import io.flutter.run.FlutterDebugProcess;
@@ -229,10 +229,11 @@ public class FlutterApp implements Disposable {
 
     Consumer<String> onTextAvailable = null;
     final ProcessHandler process = new MostlySilentColoredProcessHandler(command, onTextAvailable);
-    Disposer.register(FlutterDartAnalysisServer.getInstance(project), process::destroyProcess);
 
     final DaemonApi api = new DaemonApi(process);
     final FlutterApp app = new FlutterApp(project, mode, device, process, env, api, command);
+    // Disposing the app destroys its process, so the project only holds the app until it terminates.
+    Disposer.register(FlutterProjectDisposable.getInstance(project), app);
 
     process.addProcessListener(new ProcessAdapter() {
       @Override
@@ -613,238 +614,4 @@ public class FlutterApp implements Disposable {
       myFlutterConsoleLogManager = new FlutterConsoleLogManager(getConsole(), this);
 
       if (FlutterSettings.getInstance().isShowStructuredErrors()) {
-        // Calling this will override the default Flutter stdout error display.
-        hasServiceExtension(ServiceExtensions.toggleShowStructuredErrors.getExtension(), (present) -> {
-          if (present) {
-            callBooleanExtension(ServiceExtensions.toggleShowStructuredErrors.getExtension(), true);
-          }
-        });
-      }
-    }
-
-    return myFlutterConsoleLogManager;
-  }
-
-  @Override
-  public String toString() {
-    return myExecutionEnvironment + ":" + deviceId();
-  }
-
-  public boolean isFlutterIsolateSuspended() {
-    if (!isSessionActive() || myVMServiceManager.getCurrentFlutterIsolateRaw() == null) {
-      // The isolate cannot be suspended if it isn't running yet.
-      return false;
-    }
-    return getFlutterDebugProcess().isIsolateSuspended(myVMServiceManager.getCurrentFlutterIsolateRaw().getId());
-  }
-
-  private CompletableFuture<?> whenFlutterIsolateResumed() {
-    if (!isFlutterIsolateSuspended()) {
-      return CompletableFuture.completedFuture(null);
-    }
-    return getFlutterDebugProcess().whenIsolateResumed(myVMServiceManager.getCurrentFlutterIsolateRaw().getId());
-  }
-
-  public interface FlutterAppListener extends EventListener {
-    default void stateChanged(State newState) {
-    }
-
-    default void notifyAppReloaded() {
-    }
-
-    default void notifyAppRestarted() {
-    }
-
-    default void notifyFrameRendered() {
-    }
-
-    default void notifyVmServiceAvailable(VmService vmService) {
-    }
-  }
-
-  public enum State {STARTING, STARTED, RELOADING, RESTARTING, TERMINATING, TERMINATED}
-
-  @Override
-  public void dispose() {
-  }
-}
-
-/**
- * Listens for events while running or debugging an app.
- */
-class FlutterAppDaemonEventListener implements DaemonEvent.Listener {
-  private static final @NotNull Logger LOG = PluginLogger.createLogger(FlutterAppDaemonEventListener.class);
-
-  private final @NotNull FlutterApp app;
-  private final @NotNull ProgressHelper progress;
-  private @Nullable String appVmServiceUri;
-  private static final @NotNull DtdUtils dtdUtils = new DtdUtils();
-
-  FlutterAppDaemonEventListener(@NotNull FlutterApp app, @NotNull Project project) {
-    this.app = app;
-    this.progress = new ProgressHelper(project);
-  }
-
-  // process lifecycle
-
-  @Override
-  public void processWillTerminate() {
-    progress.cancel();
-    // Shutdown must be sync so that we prevent the processTerminated() event from being delivered
-    // until a graceful shutdown has been tried.
-    try {
-      app.shutdownAsync().get(100, TimeUnit.MILLISECONDS);
-    }
-    catch (TimeoutException e) {
-      LOG.info("app shutdown took longer than 100ms");
-    }
-    catch (Exception e) {
-      FlutterUtils.warn(LOG, "exception while shutting down Flutter App", e);
-    }
-  }
-
-  @Override
-  public void processTerminated(int exitCode) {
-    progress.cancel();
-    app.changeState(FlutterApp.State.TERMINATED);
-  }
-
-  // daemon domain
-
-  @Override
-  public void onDaemonLog(@NotNull DaemonEvent.DaemonLog message) {
-    final ConsoleView console = app.getConsole();
-    if (console == null) return;
-    if (message.log != null) {
-      console.print(message.log + "\n", message.error ? ConsoleViewContentType.ERROR_OUTPUT : ConsoleViewContentType.NORMAL_OUTPUT);
-    }
-  }
-
-  @Override
-  public void onDaemonLogMessage(@NotNull DaemonEvent.DaemonLogMessage message) {
-    LOG.info("flutter app: " + message.message);
-  }
-
-  // app domain
-
-  @Override
-  public void onAppStarting(DaemonEvent.AppStarting event) {
-    app.setAppId(event.appId);
-    app.setLaunchMode(event.launchMode);
-  }
-
-  @Override
-  public void onAppDebugPort(@NotNull DaemonEvent.AppDebugPort debugInfo) {
-    app.setWsUrl(debugInfo.wsUri);
-    this.appVmServiceUri = debugInfo.wsUri;
-
-    final JsonObject params = new JsonObject();
-    params.addProperty("uri", debugInfo.wsUri);
-    params.addProperty("name", debugInfo.appId);
-    sendDtdRequest(DtdRequest.REGISTER_VM_SERVICE, params);
-
-    // Print the conneciton info to the console.
-    final ConsoleView console = app.getConsole();
-    if (console != null) {
-      console.print("Debug service listening on " + debugInfo.wsUri + "\n", ConsoleViewContentType.NORMAL_OUTPUT);
-    }
-
-    String uri = debugInfo.baseUri;
-    if (uri != null) {
-      if (uri.startsWith("file:")) {
-        // Convert the file: url to a path.
-        try {
-          uri = new URI(uri).toURL().getPath();
-          if (uri.endsWith(File.separator)) {
-            uri = uri.substring(0, uri.length() - 1);
-          }
-        }
-        catch (IllegalArgumentException | MalformedURLException | URISyntaxException e) {
-          // ignore
-        }
-      }
-
-      app.setBaseUri(uri);
-    }
-  }
-
-  @Override
-  public void onAppStarted(DaemonEvent.AppStarted started) {
-    app.changeState(FlutterApp.State.STARTED);
-  }
-
-  @Override
-  public void onAppLog(@NotNull DaemonEvent.AppLog message) {
-    final ConsoleView console = app.getConsole();
-    if (console == null) return;
-    console.print(message.log + "\n", message.error ? ConsoleViewContentType.ERROR_OUTPUT : ConsoleViewContentType.NORMAL_OUTPUT);
-  }
-
-  @Override
-  public void onAppProgressStarting(@NotNull DaemonEvent.AppProgress event) {
-    progress.start(event.message);
-
-    if (event.getType().startsWith("hot.")) {
-      // We clear the console view in order to help indicate that a reload is happening.
-      if (app.getConsole() != null) {
-        if (!FlutterSettings.getInstance().isVerboseLogging() && !FlutterSettings.getInstance().isPerserveLogsDuringHotReloadAndRestart()) {
-          app.getConsole().clear();
-        }
-      }
-    }
-
-    if (app.getConsole() != null) {
-      app.getConsole().print(event.message + "\n", ConsoleViewContentType.NORMAL_OUTPUT);
-    }
-  }
-
-  @Override
-  public void onAppProgressFinished(@NotNull DaemonEvent.AppProgress event) {
-    progress.done();
-  }
-
-  @Override
-  public void onAppStopped(@NotNull DaemonEvent.AppStopped stopped) {
-    if (stopped.error != null && app.getConsole() != null) {
-      app.getConsole().print("Finished with error: " + stopped.error + "\n", ConsoleViewContentType.ERROR_OUTPUT);
-    }
-
-    final JsonObject params = new JsonObject();
-    params.addProperty("uri", appVmServiceUri);
-    sendDtdRequest(DtdRequest.UNREGISTER_VM_SERVICE, params);
-
-    progress.cancel();
-    app.getProcessHandler().destroyProcess();
-  }
-
-  private void sendDtdRequest(@NotNull DtdRequest dtdRequest, @NotNull JsonObject params) {
-    try {
-      final DartToolingDaemonService dtdService = dtdUtils.readyDtdService(app.getProject()).get();
-      if (dtdService == null) {
-        return;
-      }
-      // Requests for this class require sending a secret to DTD to verify that this is a trusted client; however, we don't want to log the
-      // secret. The DTD service class in the Dart plugin automatically adds the secret to the params, so without making an initial copy of
-      // the input params, the secret would be logged.
-      // TODO(helin24 in Dart plugin): Add secret to a copy of the request params.
-      JsonObject initialParams = params.deepCopy();
-      dtdService.sendRequest(dtdRequest.type, params, true, object -> {
-        final JsonObject result = object.getAsJsonObject("result");
-        final JsonPrimitive type = result != null ? result.getAsJsonPrimitive("type") : null;
-        if (type != null && "Success".equals(type.getAsString())) {
-          LOG.info("Successful request " + dtdRequest.type + " to DTD with params: " + initialParams);
-        }
-        else {
-          LOG.warn("Failed request " + dtdRequest.type + "to DTD with params: " + initialParams);
-          LOG.warn("Result: " + result);
-        }
-      });
-    }
-    // The Dart plugin changed its checked WebSocket exception type when it replaced
-    // Weberknecht. Catching the common base type keeps this call compatible with both APIs.
-    // We can potentially catch WebSocketException in the future from Dart plugin, but since it's only used for logging, the general exception is ok
-    catch (Exception e) {
-      LOG.error("Exception while sending DTD request", e);
-    }
-  }
-}
+        // 
