@@ -1,5 +1,8 @@
 # Plugin Smoke Testing
 
+> [!WARNING]
+> **Outdated Documentation**: This smoke testing document contains legacy manual test procedures. For up-to-date release verification instructions and the active manual testing checklist, refer to the [`release-plugin` skill](../.agents/skills/release-plugin/SKILL.md#5-manual-testing-checklist).
+
 Manual tests to execute before plugin releases.
 
 ## Setup
@@ -171,7 +174,7 @@ Verify that projects without Flutter project metadata open properly and are give
 Verify installation and configuration in a fresh IDEA installation.
 
 * Follow the instructions to
-  [simulate a fresh installation](https://github.com/flutter/flutter-intellij/wiki/Development#simulating-a-fresh-install).
+  [simulate a fresh installation](Development.md#simulating-a-fresh-install).
 * (If not running in a "runtime workbench", [install the plugins](https://flutter.dev/docs/development/packages-and-plugins/using-packages).)
 * Open "Languages & Frameworks>Flutter" in Preferences and verify that there is
   no Flutter SDK set.

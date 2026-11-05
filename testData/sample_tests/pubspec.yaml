@@ -1,0 +1,11 @@
+name: sample_tests
+description: Sample tests used as test data for the Flutter IntelliJ plugin.
+version: 0.0.1
+
+environment:
+  sdk: ^3.5.0
+
+dev_dependencies:
+  lints: ^5.0.0
+  meta: any
+  test: ^1.17.0

@@ -1,82 +1,209 @@
-# 71.0
-- Remove the process listener after emulator termination (#6377)
-- Remove obsolete code from NPW  (#6374)
-- Check for disposed project (#6371)
-- Remove platform availability channel warning (#6356)
-- Show values of TypedDataList in debugger (#6369)
+## Unreleased
 
-# 70.0
-- Respect embedded emulator settings (#6279)
-- Update to JX Browser 7.27 and change linux mode (#6283)
-- Guard against JSON file problems (#6273)
-- Add missing null check (#6268)
-- Check for disposed editor (#6265)
-- Log bazel mapping differences from analyzer (#6263)
-- Update icon version (#6262)
-- Use new flutter.json file location (#6261)
-- Delete FlutterBazelSettingsNotificationProvider (#6256)
+### Added
 
-# 69.0
-- Build for canary 221 (#6248)
-- Revert "Delete code duplicated from Dart (#6113)" (#6246)
-- Update .iml for 221 (#6241)
-- Disable reader mode for Flutter plugins (#6238)
-- Update the build for 2022.2 EAP (#6224)
-- Avoid using canonical path for bazel (#6227)
-- Reduce error logging for not-useful errors (#6221)
-- Ensure disconnect even if import cancelled (#6220)
-- Improve import for monorepo projects (#6217)
-- Update Flutter commands on Build and Tools menu to run for all Flutter modules (#6215)
-- Change how Open in Xcode determines what to open (#6211)
-- Update survey announcement (#6210)
+### Changed
+- Migrated test detection from `FlutterOutline` to Dart PSI. (#9159)
 
-# 68.0
-- Use distributed icons for current SDK (#6208)
-- Update icons (#6207)
-- Enable stable platforms (#6202)
-- Use correct code to shut down process (#6201)
-- Use canonical paths to map symlinks(#6203)
-- Enable Windows platform for Flutter 2.10+ (#6195)
-- Escape spaces for VM mapping (#6194)
-- Stop relying only on .packages for pub banner (#6188)
-- Update icon previews to handle new format (#6186)
-- Fix typo in actions (#6180)
-- Send timing data as a GA event (#6179)
-- Check for project disposal before download (#6173)
-- Add default token permissions values + pin dependencies (#6152)
-- Show meaningful device names (#6158)
-- Specify dart bin path (#6153)
-- Update CONTRIBUTING.md (#6146)
+### Removed
+- Legacy Dart Analysis Server URI mapping during debugging. (#9149)
 
-# 67.1
-- Specify dart bin path (#6153)
+### Fixed
 
-# 67.0
-- Disable new analytics for M67 (#6142)
-- Stop running setup on the bots (#6141)
-- Update Dart plugin version (#6139)
-- Change setting on EDT (#6137)
-- Stop using a deprecated method (#6132)
-- Refactor Transport for easier logging while debugging (#6129)
-- Fix child lines when folding code (#6128)
-- Fix analytics (#6119)
-- Fix disposer bug (#6120)
-- Remove the 30-char limit for project names (#6121)
-- Use devtools script to launch bazel devtools (#6115)
-- Report flutter SDK version on startup (#6114)
-- Add dart devtools for starting server (#6112)
-- Delete code duplicated from Dart (#6113)
-- Update web URI mapping version (#6110)
-- Work around Kokoro Dart plugin problem (#6109)
-- Plugin tool improvements (#6106)
-- Fix layout issue (#6105)
-- Clean up edit.dart (#6104)
-- Add more analytics (#5985)
-- Update build for 2022.1 (#6102)
-- Enable Dart with multiple modules (#6099)
-- Look for a single module by name (#6098)
-- Add links to 3P plugin docs (#6090)
-- Fix config to load into 2021.3 (#6088)
-- Move third-party binaries into third_party (#6087)
-- This will allow us to assess the security posture of this repository. (#6047)
-- Update CONTRIBUTING.md (#6074)
+## 97.0.0
+
+### Added
+
+### Changed
+
+### Removed
+
+### Fixed
+- Opening the iOS Simulator with Xcode 27, which replaced `Simulator.app` with `DeviceHub.app`. (#9126)
+- `IndexOutOfBoundsException` in `FlutterColorProvider`. (#9091)
+
+## 96.0.0
+
+### Added
+
+### Changed
+
+### Removed
+
+### Fixed
+- Prevent untrusted project Git error during project creation when selecting a Flutter SDK. (#9099)
+- Issue with saving the Flutter SDK path in Settings. (#9074)
+
+## 95.0.0
+
+### Added
+
+### Changed
+- Removed upper build constraint (`untilBuild`) for open-ended platform compatibility. (#9063)
+
+### Removed
+- Support for platform version 2025.1.
+- Bazel run and test configurations.
+
+### Fixed
+- IDE freeze when applying Flutter SDK path changes in Settings. (#9058)
+
+## 94.0.0
+
+### Added
+- Support for IntelliJ platform version 2026.2. (#9022)
+
+### Changed
+
+### Removed
+
+### Fixed
+
+## 93.0.0
+
+### Added
+
+- Missing platforms and targets to Build menu. (#8875)
+- Explicit text labels to Flutter device selector. (#8972)
+
+### Changed
+
+### Removed
+
+### Fixed
+- Restored device labels on split-debugger run tabs in IntelliJ IDEA 2025.3+. (#8908)
+- Debug window opening for run app in 2026.1. (#8985)
+
+## 92.0.0
+
+### Added
+
+- Option to specify the pub root module for Flutter Widget Previewer. (#8888)
+
+### Changed
+
+### Removed
+
+### Fixed
+- Silent failure when opening Flutter projects without `.idea` directory in IntelliJ IDEA, by removing `FlutterProjectOpenProcessor` and
+  migrating configuration logic to `FlutterInitializer`. (#8903)
+- IDE focus loss when running in full screen mode. (#8906)
+- Excessive toolbar updates causing exceptions in Android Studio, by making device selector updates targeted instead of global. (#8891)
+
+## 91.0.0
+
+### Changed
+
+- Gradle plugin version to re-enable running `./gradlew verifyPlugin` locally. (#8847)
+
+### Fixed
+
+- Gutter buttons not running tests with non-ASCII characters in their names. (#8838)
+- Freeze from JX Browser close. (#8864)
+- Crash in split debugger mode in IntelliJ 2025.3+. (#8878)
+- Passing additional arguments from the Flutter test template. (#8836)
+
+## 90.0.0
+
+### Added
+
+- Support for IntelliJ platform version 2026.1. (#8773)
+
+### Changed
+
+- Improved color recognition in gutter previews by making it more specific to `Colors` and `CupertinoColors` classes. (#8824)
+- Improved responsiveness by moving `FlutterInitializer` initialization and `FlutterPluginsLibraryManager` read actions off the UI thread. (
+  #8761, #8759)
+- Dart Plugin issue tracker URL in documentation. (#8784)
+
+### Removed
+
+- Support for deprecated `.packages` files. (#8724, #8721)
+
+### Fixed
+
+- Missing device labels in run tabs on IntelliJ 2025.3+. (#8796)
+
+## 89.0.0
+
+### Added
+
+### Changed
+
+### Removed
+
+### Fixed
+
+- DtdUtils static field retaining disposed Project (#8658)
+- Fixed project open hang in Android Studio 2025.2 by removing legacy `FlutterStudioProjectOpenProcessor` and migrating configuration logic
+  to `FlutterStudioStartupActivity`. (#8661)
+
+## 88.2.0
+
+### Added
+
+### Changed
+
+- Made log file `dash.log` (instead of `flutter.log`). (#8638)
+
+### Removed
+
+- Support for platform version 2024.3. (#8644)
+
+### Fixed
+
+- Fixed crash when using 3rd party loggers that don't implement `setLevel`. (#8631)
+- Fixed `IllegalStateException` and "Slow operations are prohibited on EDT" when opening projects by migrating `FlutterProjectOpenProcessor`
+  to Kotlin and using `openProjectAsync`. (#8629)
+
+## 88.1.0
+
+### Added
+
+- Widget preview tool window (#8595, #8599).
+
+### Changed
+
+- Made Flutter project open to project view by default. (#8573)
+- Fixed incorrect colors for the device selector when using light themes. (#8576)
+
+## 88.0.0
+
+### Added
+
+- Support for Android Studio 2025.2.
+
+### Removed
+
+- Notification of required pub actions at the top of Dart files. (#7623, #8481)
+
+### Changed
+
+- Updated the Flutter version reading to use the file `./bin/cache/flutter.version.json`, as required in Flutter 3.33+. (#8465)
+- Resolved a "Slow operations are prohibited on EDT" exception on Flutter Project creation. (#8446, #8447, #8448)
+- Made dev release daily instead of weekly.
+- Set the device selector component to opaque during its creation to avoid an unexpected background color. (#8471)
+- Refactored `DeviceSelectorAction` and added rich icons to different platform devices. (#8475)
+- Fixed DTD freezes when opening projects and EDT freezes when the theme is changed and opening embedded DevTools. (#8477)
+- Fixed `DeviceSelectorAction` `NoSuchElementException` in the toolbar layout. (#8515)
+- Fixed `DeviceSelectorAction`'s concurrent modification exception. (#8550)
+
+## 87.1.0
+
+### Changed
+
+- Registered VM service with DTD. (#8436)
+- Fixed a ClassCastException for BadgeIcon on flutter runs. (#8426)
+
+## 87.0.0
+
+### Added
+
+- Internal support for logging to a dedicated plugin log file. (#8253)
+
+### Changed
+
+- Made Android dependencies optional, allowing the plugin to be used in more Jetbrains products (Rider, etc). (#7949, #8375)
+- Fixed issues with Flutter test execution. (#8233, #8325)
+- Fixed issues to ensure the Property Editor loads on all project opens. (#8268)
+- Fixed a hang after opening a new project in Android Studio. (#8390)

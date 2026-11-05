@@ -1,5 +1,3 @@
-<!-- Do not edit; instead, modify studio-contribs_template.xml, and run './bin/plugin generate'. -->
-
 <!-- Defines Android Studio IDE-specific contributions and implementations. -->
 <idea-plugin>
 
@@ -10,18 +8,14 @@
 
   <extensions defaultExtensionNs="com.intellij">
     <externalSystemTaskNotificationListener implementation="io.flutter.utils.FlutterExternalSystemTaskNotificationListener"/>
-    <androidStudioInitializer implementation="io.flutter.FlutterStudioInitializer"/>
     <postStartupActivity implementation="io.flutter.FlutterStudioStartupActivity"/>
-    <projectOpenProcessor implementation="io.flutter.editor.FlutterStudioProjectOpenProcessor" order="after flutter"/>
-    <library.type implementation="io.flutter.android.AndroidModuleLibraryType"/>
-    <projectService serviceInterface="io.flutter.android.AndroidModuleLibraryManager"
-                    serviceImplementation="io.flutter.android.AndroidModuleLibraryManager"/>
 
   </extensions>
 
   <actions>
 
     <!-- Define the 'New Flutter Project' menu item -->
+    <!--suppress PluginXmlI18n -->
     <action id="flutter.NewProject" class="io.flutter.actions.FlutterNewProjectAction"
             text="New Flutter Project..."
             description="Create a new Flutter project">
@@ -29,20 +23,13 @@
     </action>
 
     <!-- The icon isn't being used here, but it is set by the action -->
+    <!--suppress PluginXmlI18n -->
     <action id="flutter.NewProject.welcome" class="io.flutter.actions.FlutterNewProjectAction"
             text="Create New Flutter Project"
             icon="FlutterIcons.Flutter"
             description="Create a new Flutter project">
       <add-to-group group-id="WelcomeScreen.QuickStart" anchor="first"/>
     </action>
-
-    <!-- action
-      id="DeveloperServices.FlutterNewsAssistant"
-      class="io.flutter.actions.OpenFlutterNewsSidePanelAction"
-      icon="/icons/flutter.png"
-      text="What's New in Flutter">
-      <add-to-group group-id="HelpMenu" />
-    </action -->
 
   </actions>
 

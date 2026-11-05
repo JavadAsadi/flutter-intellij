@@ -1,0 +1,617 @@
+/*
+ * Copyright 2016 The Chromium Authors. All rights reserved.
+ * Use of this source code is governed by a BSD-style license that can be
+ * found in the LICENSE file.
+ */
+package io.flutter.run.linux;
+
+import com.google.common.base.Stopwatch;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonPrimitive;
+import com.intellij.execution.ExecutionException;
+import com.intellij.execution.configurations.GeneralCommandLine;
+import com.intellij.execution.process.ProcessEvent;
+import com.intellij.execution.process.ProcessHandler;
+import com.intellij.execution.runners.ExecutionEnvironment;
+import com.intellij.execution.ui.ConsoleView;
+import com.intellij.execution.ui.ConsoleViewContentType;
+import com.intellij.execution.ui.RunContentDescriptor;
+import com.intellij.execution.ui.RunContentManager;
+import com.intellij.history.LocalHistory;
+import com.intellij.openapi.Disposable;
+import com.intellij.openapi.diagnostic.Logger;
+import com.intellij.openapi.module.Module;
+import com.intellij.openapi.project.Project;
+import com.intellij.openapi.util.Disposer;
+import com.intellij.openapi.util.Key;
+import com.intellij.openapi.util.text.StringUtil;
+import com.intellij.util.EventDispatcher;
+import com.intellij.util.concurrency.AppExecutorUtil;
+import com.jetbrains.lang.dart.ide.toolingDaemon.DartToolingDaemonService;
+import io.flutter.FlutterProjectDisposable;
+import io.flutter.FlutterUtils;
+import io.flutter.ObservatoryConnector;
+import io.flutter.dart.DtdRequest;
+import io.flutter.dart.DtdUtils;
+import io.flutter.logging.FlutterConsoleLogManager;
+import io.flutter.logging.PluginLogger;
+import io.flutter.run.FlutterDebugProcess;
+import io.flutter.run.FlutterDevice;
+import io.flutter.run.FlutterLaunchMode;
+import io.flutter.run.common.RunMode;
+import io.flutter.settings.FlutterSettings;
+import io.flutter.utils.MostlySilentColoredProcessHandler;
+import io.flutter.utils.ProcessAdapter;
+import io.flutter.utils.ProgressHelper;
+import io.flutter.utils.StreamSubscription;
+import io.flutter.utils.VmServiceListenerAdapter;
+import io.flutter.vmService.ServiceExtensions;
+import io.flutter.vmService.VMServiceManager;
+import org.dartlang.vm.service.VmService;
+import org.dartlang.vm.service.element.Event;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+import java.io.File;
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.util.ArrayList;
+import java.util.EventListener;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
+
+// TODO(devoncarew): Move this class up to the io.flutter.run package.
+
+/**
+ * A running Flutter app.
+ */
+public class FlutterApp implements Disposable {
+  private static final @NotNull Logger LOG = PluginLogger.createLogger(FlutterApp.class);
+  private static final Key<FlutterApp> FLUTTER_APP_KEY = new Key<>("FLUTTER_APP_KEY");
+
+  private final @NotNull Project myProject;
+  private final @NotNull RunMode myMode;
+  private final @NotNull FlutterDevice myDevice;
+  private final @NotNull ProcessHandler myProcessHandler;
+  private final @NotNull ExecutionEnvironment myExecutionEnvironment;
+  private final @NotNull DaemonApi myDaemonApi;
+  private final @NotNull GeneralCommandLine myCommand;
+
+  private @Nullable String myAppId;
+  private @Nullable String myWsUrl;
+  private @Nullable String myBaseUri;
+  private @Nullable ConsoleView myConsole;
+  private FlutterConsoleLogManager myFlutterConsoleLogManager;
+
+  /**
+   * The command with which the app was launched.
+   * <p>
+   * Should be "run" if the app was `flutter run` and "attach" if the app was `flutter attach`.
+   */
+  private @Nullable String myLaunchMode;
+
+  private int reloadCount;
+  private int userReloadCount;
+  private int restartCount;
+
+  /**
+   * Non-null when the debugger is paused.
+   */
+  private @Nullable Runnable myResume;
+
+  private final AtomicReference<State> myState = new AtomicReference<>(State.STARTING);
+  private final EventDispatcher<FlutterAppListener> listenersDispatcher = EventDispatcher.create(FlutterAppListener.class);
+
+  private final ObservatoryConnector myConnector;
+  private @Nullable FlutterDebugProcess myFlutterDebugProcess;
+  private @Nullable VmService myVmService;
+  private @Nullable VMServiceManager myVMServiceManager;
+
+  private static final Key<FlutterApp> APP_KEY = Key.create("FlutterApp");
+
+  public static void addToEnvironment(@NotNull ExecutionEnvironment env, @NotNull FlutterApp app) {
+    env.putUserData(APP_KEY, app);
+  }
+
+  @Nullable
+  public static FlutterApp fromEnv(@NotNull ExecutionEnvironment env) {
+    return env.getUserData(APP_KEY);
+  }
+
+  FlutterApp(@NotNull Project project,
+             @NotNull RunMode mode,
+             @NotNull FlutterDevice device,
+             @NotNull ProcessHandler processHandler,
+             @NotNull ExecutionEnvironment executionEnvironment,
+             @NotNull DaemonApi daemonApi,
+             @NotNull GeneralCommandLine command) {
+    myProject = project;
+    myMode = mode;
+    myDevice = device;
+    myProcessHandler = processHandler;
+    myProcessHandler.putUserData(FLUTTER_APP_KEY, this);
+    myExecutionEnvironment = executionEnvironment;
+    myDaemonApi = daemonApi;
+    myCommand = command;
+    myConnector = new ObservatoryConnector() {
+      @Override
+      public @Nullable
+      String getWebSocketUrl() {
+        // Don't try to use observatory until the flutter command is done starting up.
+        if (getState() != State.STARTED) return null;
+        return myWsUrl;
+      }
+
+      public @Nullable
+      String getBrowserUrl() {
+        String url = myWsUrl;
+        if (url == null) return null;
+        if (url.startsWith("ws:")) {
+          url = "http:" + url.substring(3);
+        }
+        if (url.endsWith("/ws")) {
+          url = url.substring(0, url.length() - 3);
+        }
+        return url;
+      }
+
+      @Override
+      public String getRemoteBaseUrl() {
+        return myBaseUri;
+      }
+
+      @Override
+      public void onDebuggerPaused(@NotNull Runnable resume) {
+        myResume = resume;
+      }
+
+      @Override
+      public void onDebuggerResumed() {
+        myResume = null;
+      }
+    };
+  }
+
+  @NotNull
+  public GeneralCommandLine getCommand() {
+    return myCommand;
+  }
+
+  @Nullable
+  public static FlutterApp fromProcess(@NotNull ProcessHandler process) {
+    return process.getUserData(FLUTTER_APP_KEY);
+  }
+
+  @NotNull
+  public static List<FlutterApp> allFromProjectProcess(@NotNull Project project) {
+    final List<FlutterApp> allRunningApps = new ArrayList<>();
+    final List<RunContentDescriptor> runningProcesses =
+      RunContentManager.getInstance(project).getAllDescriptors();
+    for (RunContentDescriptor descriptor : runningProcesses) {
+      final ProcessHandler process = descriptor.getProcessHandler();
+      if (process != null) {
+        final FlutterApp app = FlutterApp.fromProcess(process);
+        if (app != null) {
+          allRunningApps.add(app);
+        }
+      }
+    }
+
+    return allRunningApps;
+  }
+
+  /**
+   * Creates a process that will launch the flutter app.
+   * <p>
+   * (Assumes we are launching it in --machine mode.)
+   */
+  @NotNull
+  public static FlutterApp start(@NotNull ExecutionEnvironment env,
+                                 @NotNull Project project,
+                                 @Nullable Module module,
+                                 @NotNull RunMode mode,
+                                 @NotNull FlutterDevice device,
+                                 @NotNull GeneralCommandLine command,
+                                 @Nullable String analyticsStart,
+                                 @Nullable String analyticsStop)
+    throws ExecutionException {
+    LOG.info(analyticsStart + " " + project.getName() + " (" + mode.mode() + ")");
+    LOG.info(command.toString());
+
+    Consumer<String> onTextAvailable = null;
+    final ProcessHandler process = new MostlySilentColoredProcessHandler(command, onTextAvailable);
+
+    final DaemonApi api = new DaemonApi(process);
+    final FlutterApp app = new FlutterApp(project, mode, device, process, env, api, command);
+    // Disposing the app destroys its process, so the project only holds the app until it terminates.
+    Disposer.register(FlutterProjectDisposable.getInstance(project), app);
+
+    process.addProcessListener(new ProcessAdapter() {
+      @Override
+      public void processTerminated(@NotNull ProcessEvent event) {
+        LOG.info(analyticsStop + " " + project.getName() + " (" + mode.mode() + ")");
+
+        Disposer.dispose(app);
+      }
+    });
+
+    api.listen(process, new FlutterAppDaemonEventListener(app, project));
+
+    return app;
+  }
+
+  @NotNull
+  public RunMode getMode() {
+    return myMode;
+  }
+
+  /**
+   * Returns the process running the daemon.
+   */
+  @NotNull
+  public ProcessHandler getProcessHandler() {
+    return myProcessHandler;
+  }
+
+  @NotNull
+  public ObservatoryConnector getConnector() {
+    return myConnector;
+  }
+
+  /**
+   * @noinspection BooleanMethodIsAlwaysInverted
+   */
+  public boolean appSupportsHotReload() {
+    // Introspect based on registered services.
+    if (myVMServiceManager != null && myVMServiceManager.hasAnyRegisteredServices()) {
+      return myVMServiceManager.hasRegisteredService("reloadSources");
+    }
+
+    return true;
+  }
+
+  public State getState() {
+    return myState.get();
+  }
+
+  public boolean isStarted() {
+    final State state = myState.get();
+    return state != State.STARTING && state != State.TERMINATED;
+  }
+
+  public boolean isReloading() {
+    return myState.get() == State.RELOADING || myState.get() == State.RESTARTING;
+  }
+
+  public boolean isConnected() {
+    return myState.get() != State.TERMINATING && myState.get() != State.TERMINATED;
+  }
+
+  void setAppId(@NotNull String id) {
+    myAppId = id;
+  }
+
+  void setWsUrl(@NotNull String url) {
+    myWsUrl = url;
+  }
+
+  void setBaseUri(@NotNull String uri) {
+    myBaseUri = uri;
+  }
+
+  void setLaunchMode(@Nullable String launchMode) {
+    myLaunchMode = launchMode;
+  }
+
+  /**
+   * Perform a hot restart of the app.
+   */
+  public CompletableFuture<DaemonApi.RestartResult> performRestartApp(@NotNull String reason) {
+    if (myAppId == null) {
+      LOG.warn("cannot restart Flutter app because app id is not set");
+
+      final CompletableFuture<DaemonApi.RestartResult> result = new CompletableFuture<>();
+      result.completeExceptionally(new IllegalStateException("cannot restart Flutter app because app id is not set"));
+      return result;
+    }
+
+    restartCount++;
+    userReloadCount = 0;
+
+    LocalHistory.getInstance().putSystemLabel(getProject(), "Flutter hot restart");
+
+    changeState(State.RESTARTING);
+
+    final CompletableFuture<DaemonApi.RestartResult> future =
+      myDaemonApi.restartApp(myAppId, true, false, reason);
+    future.thenAccept(result -> changeState(State.STARTED));
+    future.thenRun(this::notifyAppRestarted);
+    return future;
+  }
+
+  private void notifyAppReloaded() {
+    listenersDispatcher.getMulticaster().notifyAppReloaded();
+  }
+
+  private void notifyAppRestarted() {
+    listenersDispatcher.getMulticaster().notifyAppRestarted();
+  }
+
+  /**
+   * Indicate that we are about the start hot reload for this app.
+   * <p>
+   * This state change is useful as we can delay the actual hot reload slightly, but still change the
+   * app state in order to prevent starting two simultaneous hot reloads.
+   * <p>
+   * Return the previous app state.
+   */
+  public State transitionStartingHotReload() {
+    final State newState = State.RELOADING;
+    final State oldState = myState.getAndSet(newState);
+    if (oldState != newState) {
+      listenersDispatcher.getMulticaster().stateChanged(newState);
+    }
+    return oldState;
+  }
+
+  /**
+   * Cancel a hot reload state and restore the app's previous state (generally, `State.STARTED`).
+   */
+  public void cancelHotReloadState(@Nullable State previousState) {
+    if (previousState != null) {
+      changeState(previousState);
+    }
+  }
+
+  /**
+   * Perform a hot reload of the app.
+   */
+  public CompletableFuture<DaemonApi.RestartResult> performHotReload(boolean pauseAfterRestart, @NotNull String reason) {
+    if (myAppId == null) {
+      LOG.warn("cannot reload Flutter app because app id is not set");
+
+      if (getState() == State.RELOADING) {
+        changeState(State.STARTED);
+      }
+
+      final CompletableFuture<DaemonApi.RestartResult> result = new CompletableFuture<>();
+      result.completeExceptionally(new IllegalStateException("cannot reload Flutter app because app id is not set"));
+      return result;
+    }
+
+    reloadCount++;
+    userReloadCount++;
+
+    LocalHistory.getInstance().putSystemLabel(getProject(), "hot reload #" + userReloadCount);
+
+    changeState(State.RELOADING);
+
+    final CompletableFuture<DaemonApi.RestartResult> future =
+      myDaemonApi.restartApp(myAppId, false, pauseAfterRestart, reason);
+    future.thenAccept(result -> changeState(State.STARTED));
+    future.thenRun(this::notifyAppReloaded);
+    return future;
+  }
+
+  public CompletableFuture<JsonObject> callServiceExtension(String methodName) {
+    return callServiceExtension(methodName, new HashMap<>());
+  }
+
+  public CompletableFuture<JsonObject> callServiceExtension(String methodName, Map<String, Object> params) {
+    if (myAppId == null) {
+      LOG.warn("cannot invoke " + methodName + " on Flutter app because app id is not set");
+      return CompletableFuture.completedFuture(null);
+    }
+
+    if (isFlutterIsolateSuspended()) {
+      return whenFlutterIsolateResumed().thenComposeAsync(
+        (ignored) -> myDaemonApi.callAppServiceExtension(myAppId, methodName, params)
+      );
+    }
+    else {
+      // TODO(devoncarew): Convert this to using the service protocol (instead of the daemon protocol).
+      return myDaemonApi.callAppServiceExtension(myAppId, methodName, params);
+    }
+  }
+
+  @SuppressWarnings("UnusedReturnValue")
+  public CompletableFuture<Boolean> callBooleanExtension(String methodName, boolean enabled) {
+    final Map<String, Object> params = new HashMap<>();
+    params.put("enabled", enabled);
+    return callServiceExtension(methodName, params).thenApply(obj -> {
+      //noinspection CodeBlock2Expr
+      return obj == null ? null : obj.get("enabled").getAsBoolean();
+    });
+  }
+
+  /**
+   * Call a boolean service extension only if it is already present, skipping otherwise.
+   * <p>
+   * Only use this method if you are confident there will not be a race condition where
+   * the service extension is registered shortly after this method is called.
+   */
+  @SuppressWarnings("UnusedReturnValue")
+  public CompletableFuture<Boolean> maybeCallBooleanExtension(String methodName, boolean enabled) {
+    if (getVMServiceManager() != null && getVMServiceManager().hasServiceExtensionNow(methodName)) {
+      return callBooleanExtension(methodName, enabled);
+    }
+    return CompletableFuture.completedFuture(false);
+  }
+
+  @Nullable
+  public StreamSubscription<Boolean> hasServiceExtension(String name, Consumer<Boolean> onData) {
+    if (getVMServiceManager() == null) {
+      return null;
+    }
+    return getVMServiceManager().hasServiceExtension(name, onData);
+  }
+
+  public void setConsole(@Nullable ConsoleView console) {
+    myConsole = console;
+  }
+
+  @Nullable
+  public ConsoleView getConsole() {
+    return myConsole;
+  }
+
+  /**
+   * Transitions to a new state and fires events.
+   * <p>
+   * If no change is needed, returns false and does not fire events.
+   */
+  boolean changeState(@NotNull State newState) {
+    final State oldState = myState.getAndSet(newState);
+    if (oldState == newState) {
+      return false; // debounce
+    }
+    listenersDispatcher.getMulticaster().stateChanged(newState);
+    return true;
+  }
+
+  /**
+   * Starts shutting down the process.
+   * <p>
+   * If possible, we want to shut down gracefully by sending a stop command to the application.
+   */
+  public Future shutdownAsync() {
+    final FutureTask done = new FutureTask<>(() -> null);
+    if (!changeState(State.TERMINATING)) {
+      done.run();
+      return done; // Debounce; already shutting down.
+    }
+
+    if (myResume != null) {
+      myResume.run();
+    }
+
+    final String appId = myAppId;
+    if (appId == null) {
+      // If it didn't finish starting up, shut down abruptly.
+      myProcessHandler.destroyProcess();
+      done.run();
+      return done;
+    }
+
+    // Do the rest in the background to avoid freezing the Swing dispatch thread.
+    AppExecutorUtil.getAppExecutorService().submit(() -> {
+      // Try to shut down gracefully (need to wait for a response).
+      final Future stopDone;
+      if (DaemonEvent.AppStarting.LAUNCH_MODE_ATTACH.equals(myLaunchMode)) {
+        stopDone = myDaemonApi.detachApp(appId);
+      }
+      else {
+        stopDone = myDaemonApi.stopApp(appId);
+      }
+      final Stopwatch watch = Stopwatch.createStarted();
+      while (watch.elapsed(TimeUnit.SECONDS) < 10 && getState() == State.TERMINATING) {
+        try {
+          stopDone.get(100, TimeUnit.MILLISECONDS);
+          break;
+        }
+        catch (TimeoutException e) {
+          // continue
+        }
+        catch (Exception e) {
+          // Ignore errors from app.stop.
+          break;
+        }
+      }
+
+      // If it didn't work, shut down abruptly.
+      myProcessHandler.destroyProcess();
+      myDaemonApi.cancelPending();
+      done.run();
+    });
+    return done;
+  }
+
+  public void addStateListener(@NotNull FlutterAppListener listener) {
+    listenersDispatcher.addListener(listener);
+    listener.stateChanged(myState.get());
+  }
+
+  public void removeStateListener(@NotNull FlutterAppListener listener) {
+    listenersDispatcher.removeListener(listener);
+  }
+
+  public FlutterLaunchMode getLaunchMode() {
+    return FlutterLaunchMode.fromEnv(myExecutionEnvironment);
+  }
+
+  public boolean isSessionActive() {
+    final FlutterDebugProcess debugProcess = getFlutterDebugProcess();
+    return isStarted() && debugProcess != null && debugProcess.getVmConnected() &&
+           !debugProcess.getSession().isStopped();
+  }
+
+  @NotNull
+  public FlutterDevice device() {
+    return myDevice;
+  }
+
+  @Nullable
+  public String deviceId() {
+    return myDevice.deviceId();
+  }
+
+  public void setFlutterDebugProcess(FlutterDebugProcess flutterDebugProcess) {
+    myFlutterDebugProcess = flutterDebugProcess;
+  }
+
+  public FlutterDebugProcess getFlutterDebugProcess() {
+    return myFlutterDebugProcess;
+  }
+
+  public void setVmServices(@NotNull VmService vmService, VMServiceManager vmServiceManager) {
+    myVmService = vmService;
+    myVMServiceManager = vmServiceManager;
+
+    myVmService.addVmServiceListener(new VmServiceListenerAdapter() {
+      @Override
+      public void received(String streamId, Event event) {
+        if (StringUtil.equals(streamId, VmService.EXTENSION_STREAM_ID)) {
+          if (StringUtil.equals("Flutter.Frame", event.getExtensionKind())) {
+            listenersDispatcher.getMulticaster().notifyFrameRendered();
+          }
+        }
+      }
+    });
+
+    listenersDispatcher.getMulticaster().notifyVmServiceAvailable(vmService);
+
+    // Init the app's FlutterConsoleLogManager.
+    getFlutterConsoleLogManager();
+  }
+
+  @Nullable
+  public VmService getVmService() {
+    return myVmService;
+  }
+
+  @Nullable
+  public VMServiceManager getVMServiceManager() {
+    return myVMServiceManager;
+  }
+
+  @NotNull
+  public Project getProject() {
+    return myProject;
+  }
+
+  public FlutterConsoleLogManager getFlutterConsoleLogManager() {
+    if (myFlutterConsoleLogManager == null) {
+      assert (getConsole() != null);
+      myFlutterConsoleLogManager = new FlutterConsoleLogManager(getConsole(), this);
+
+      if (FlutterSettings.getInstance().isShowStructuredErrors()) {
+        // 

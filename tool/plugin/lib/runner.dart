@@ -1,8 +1,6 @@
 // Copyright 2017 The Chromium Authors. All rights reserved. Use of this source
 // code is governed by a BSD-style license that can be found in the LICENSE file.
 
-// @dart = 2.10
-
 import 'dart:async';
 import 'dart:io';
 
@@ -12,10 +10,12 @@ import 'build_spec.dart';
 import 'globals.dart';
 import 'util.dart';
 
-class BuildCommandRunner extends CommandRunner {
+class BuildCommandRunner extends CommandRunner<int> {
   BuildCommandRunner()
-      : super('plugin',
-            'A script to build, test, and deploy the Flutter IntelliJ plugin.') {
+      : super(
+          'plugin',
+          'A script to build, test, and deploy the Flutter IntelliJ plugin.',
+        ) {
     argParser.addOption(
       'release',
       abbr: 'r',
@@ -30,56 +30,31 @@ class BuildCommandRunner extends CommandRunner {
     );
   }
 
-  void writeJxBrowserKeyToFile() {
-    final jxBrowserKey =
-        readTokenFromKeystore('FLUTTER_KEYSTORE_JXBROWSER_KEY_NAME');
-    final propertiesFile =
-        File("$rootPath/resources/jxbrowser/jxbrowser.properties");
-    if (jxBrowserKey.isNotEmpty) {
-      final contents = '''
-jxbrowser.license.key=$jxBrowserKey
-''';
-      propertiesFile.writeAsStringSync(contents);
-    }
-  }
-
-  Future<int> buildPlugin(BuildSpec spec, String version) async {
-    writeJxBrowserKeyToFile();
-    return await runGradleCommand(['buildPlugin'], spec, version, 'false');
-  }
-
   Future<int> runGradleCommand(
     List<String> command,
     BuildSpec spec,
     String version,
     String testing,
   ) async {
-    var javaVersion, smaliPlugin, langPlugin;
-    if (['AS.211', 'AS.212', 'AS.213', 'setup', '2022.1', '2022.2'].contains(spec.version)) {
-      javaVersion = '11';
-      smaliPlugin = 'smali';
-      langPlugin = 'IntelliLang';
-    } else {
-      javaVersion = '17';
-      smaliPlugin = 'com.android.tools.idea.smali';
-      langPlugin = 'org.intellij.intelliLang';
-    }
     final contents = '''
-name = "flutter-intellij"
-org.gradle.parallel=true
-org.gradle.jvmargs=-Xms128m -Xmx1024m
-javaVersion=$javaVersion
-dartVersion=${spec.dartPluginVersion}
-flutterPluginVersion=$version
-ide=${spec.ideaProduct}
-testing=$testing
+name = "flutter-intellij
 buildSpec=${spec.version}
+flutterPluginVersion=$version
+ideaProduct=${spec.ideaProduct}
+ideaVersion=${spec.ideaVersion}
 baseVersion=${spec.baseVersion}
-smaliPlugin=$smaliPlugin
-langPlugin=$langPlugin
+dartPluginVersion=${spec.dartPluginVersion}
+androidPluginVersion=${spec.androidPluginVersion}
+sinceBuild=${spec.sinceBuild}
+testing=$testing
+javaVersion=${spec.javaVersion}
+kotlin.stdlib.default.dependency=false
+org.gradle.parallel=true
+org.gradle.jvmargs=-Xms1024m -Xmx4048m
 ''';
     final propertiesFile = File("$rootPath/gradle.properties");
-    final source = propertiesFile.readAsStringSync();
+    final source =
+        propertiesFile.existsSync() ? propertiesFile.readAsStringSync() : null;
     propertiesFile.writeAsStringSync(contents);
     int result;
     // Using the Gradle daemon causes a strange problem.
@@ -91,16 +66,16 @@ langPlugin=$langPlugin
           log('CANNOT BUILD ${spec.version} ON WINDOWS');
           return 0;
         }
-        result = await exec('.\\third_party\\gradlew.bat', command);
+        result = await exec('.\\gradlew.bat', command);
       } else {
         if (spec.version == '4.1') {
           return await runShellScript(command, spec);
         } else {
-          result = await exec('./third_party/gradlew', command);
+          result = await exec('./gradlew', command);
         }
       }
     } finally {
-      propertiesFile.writeAsStringSync(source);
+      if (source != null) propertiesFile.writeAsStringSync(source);
     }
     return result;
   }
@@ -109,7 +84,7 @@ langPlugin=$langPlugin
     var script = '''
 #!/bin/bash
 export JAVA_HOME=\$JAVA_HOME_OLD
-./third_party/gradlew ${command.join(' ')}
+./gradlew ${command.join(' ')}
 ''';
     var systemTempDir = Directory.systemTemp;
     var dir = systemTempDir.createTempSync();

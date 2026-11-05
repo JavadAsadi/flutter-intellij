@@ -1,8 +1,8 @@
 class $NAME$ extends StatelessWidget {
-  const $NAME$({Key? key}) : super(key: key);
+  const $NAME$({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return Container($END$);
+    return const Placeholder($END$);
   }
 }
